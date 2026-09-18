@@ -30,6 +30,10 @@ MONTHLY_SERIES_LENGTH = 12
 AUTH_RETRY_DELAY = 3.0
 
 
+class _LoginTokenRejected(CloudAuthError):
+    """Raised when a token from a completed login is still rejected."""
+
+
 @dataclass(frozen=True, slots=True)
 class E3DayReport:
     """Parsed dayReportV2 data for an E3 gas water heater.
@@ -194,7 +198,7 @@ class E3CloudReportClient:
         """
         try:
             result = await self._async_fetch(appliance_id)
-        except CloudAuthError:
+        except _LoginTokenRejected:
             # A fresh token can be rejected until the gateway propagates it;
             # drop the cached client and authenticate again.
             self._cloud = None
@@ -237,7 +241,10 @@ class E3CloudReportClient:
             # A token issued by a fresh login is rejected until the gateway
             # propagates it; retry the same token once after a short delay.
             await asyncio.sleep(AUTH_RETRY_DELAY)
-            return await cloud.get_day_report(appliance_id)
+            try:
+                return await cloud.get_day_report(appliance_id)
+            except CloudAuthError as retry_err:
+                raise _LoginTokenRejected(str(retry_err)) from retry_err
 
     async def _async_cloud(self) -> MideaCloud:
         """Return the cloud client, creating it on first use.

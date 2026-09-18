@@ -386,6 +386,7 @@ class MideaCloud:
                     headers=headers,
                     json=payload,
                     timeout=DAY_REPORT_TIMEOUT,
+                    allow_redirects=False,
                 )
                 data: Any = await response.json(content_type=None)
         except (ClientError, TimeoutError, ValueError) as err:

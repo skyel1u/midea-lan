@@ -9,7 +9,7 @@ from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-from aiohttp import ClientConnectionError, ClientTimeout
+from aiohttp import ClientConnectionError, ClientSession, ClientTimeout, web
 
 from midealan.cloud import (
     DEFAULT_KEYS,
@@ -1562,6 +1562,51 @@ class DayReportTest(IsolatedAsyncioTestCase):
             "msg": "dayReportV2",
             "params": {"applianceId": "100"},
         }
+        assert call.kwargs["allow_redirects"] is False
+
+    async def test_get_day_report_does_not_follow_redirect(self) -> None:
+        """Do not follow day-report redirects with the access token header."""
+        target_tokens: list[str | None] = []
+
+        async def target_handler(request: web.Request) -> web.Response:
+            target_tokens.append(request.headers.get("accessToken"))
+            return web.json_response({"retCode": "0", "result": {}})
+
+        target_runner = web.AppRunner(web.Application())
+        target_runner.app.router.add_post("/target", target_handler)
+        await target_runner.setup()
+        target_site = web.TCPSite(target_runner, "127.0.0.1", 0)
+        await target_site.start()
+        assert target_site._server is not None
+        target_port = target_site._server.sockets[0].getsockname()[1]
+
+        async def redirect_handler(_request: web.Request) -> web.Response:
+            return web.Response(
+                status=307,
+                headers={"Location": f"http://127.0.0.1:{target_port}/target"},
+            )
+
+        redirect_runner = web.AppRunner(web.Application())
+        redirect_runner.app.router.add_post("/mas/v5/app/proxy", redirect_handler)
+        await redirect_runner.setup()
+        redirect_site = web.TCPSite(redirect_runner, "127.0.0.1", 0)
+        await redirect_site.start()
+        assert redirect_site._server is not None
+        redirect_port = redirect_site._server.sockets[0].getsockname()[1]
+
+        try:
+            async with ClientSession() as session:
+                cloud = self._cloud(
+                    session,
+                    api_url=f"http://127.0.0.1:{redirect_port}/mas/v5/app/proxy?alias=",
+                )
+                cloud.set_access_token("token")
+                with pytest.raises(CloudError):
+                    await cloud.get_day_report(100)
+        finally:
+            await redirect_runner.cleanup()
+            await target_runner.cleanup()
+        assert target_tokens == []
 
     async def test_get_day_report_empty_result(self) -> None:
         """Return None when the cloud holds no report for the appliance."""

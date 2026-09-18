@@ -130,6 +130,25 @@ class E3CloudReportClientTest(IsolatedAsyncioTestCase):
         assert cloud.get_day_report.await_count == 2
         assert report is not None
 
+    async def test_rejected_stored_token_without_account_raises_after_retry(
+        self,
+    ) -> None:
+        """Do not perform an outer retry when a standalone token is rejected."""
+        cloud = Mock()
+        cloud.get_day_report = AsyncMock(side_effect=CloudAuthError("40002"))
+        client = E3CloudReportClient("美的美居", Mock(), access_token="token")
+        with (
+            patch(
+                "midealan.devices.e3.cloud_report.get_midea_cloud",
+                return_value=cloud,
+            ),
+            patch("asyncio.sleep", AsyncMock()) as sleep,
+            pytest.raises(CloudAuthError),
+        ):
+            await client.async_get_report(100)
+        sleep.assert_awaited_once()
+        assert cloud.get_day_report.await_count == 2
+
     async def test_logs_in_after_rejected_token(self) -> None:
         """Log in with the stored account when the stored token was rejected."""
         token_cloud = Mock()
@@ -221,6 +240,7 @@ class E3CloudReportClientTest(IsolatedAsyncioTestCase):
             pytest.raises(CloudAuthError),
         ):
             await client.async_get_report(100)
+        cloud.login.assert_awaited_once()
 
     async def test_no_credentials(self) -> None:
         """Raise CloudAuthError when neither token nor account is stored."""
