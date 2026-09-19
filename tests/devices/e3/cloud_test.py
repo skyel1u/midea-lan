@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from midealan.devices.e3.cloud_report import (
-    E3CloudReportClient,
+from midealan.devices.e3.cloud import (
+    E3CloudClient,
     parse_day_report,
 )
 from midealan.exceptions import CloudAuthError, CloudError
@@ -80,17 +80,23 @@ class TestParseDayReport:
         assert report.water_monthly is None
         assert report.water_last_month is None
 
+    def test_parse_day_report_invalid_numeric_series(self) -> None:
+        """Ignore a daily series containing a non-numeric value."""
+        invalid_series = ",".join(["1"] * 30 + ["invalid"])
+        report = parse_day_report(_result(hotwaterUsem=invalid_series))
+        assert report.water_daily is None
+
     def test_parse_day_report_invalid_date(self) -> None:
         """Fall back to yesterday in local time when the date is invalid."""
         fake_now = Mock()
         fake_now.astimezone.return_value = datetime(2026, 9, 12, 12, 0, tzinfo=UTC)
-        with patch("midealan.devices.e3.cloud_report.datetime") as mock_datetime:
+        with patch("midealan.devices.e3.cloud.datetime") as mock_datetime:
             mock_datetime.now.return_value = fake_now
             report = parse_day_report({"date": "not-a-date"})
         assert report.report_date == date(2026, 9, 11)
 
 
-class E3CloudReportClientTest(IsolatedAsyncioTestCase):
+class E3CloudClientTest(IsolatedAsyncioTestCase):
     """Test the E3 cloud report client."""
 
     async def test_uses_stored_token(self) -> None:
@@ -98,9 +104,9 @@ class E3CloudReportClientTest(IsolatedAsyncioTestCase):
         cloud = Mock()
         cloud.get_day_report = AsyncMock(return_value=_result())
         session = Mock()
-        client = E3CloudReportClient("美的美居", session, access_token="token")
+        client = E3CloudClient("美的美居", session, access_token="token")
         with patch(
-            "midealan.devices.e3.cloud_report.get_midea_cloud",
+            "midealan.devices.e3.cloud.get_midea_cloud",
             return_value=cloud,
         ) as get_cloud:
             report = await client.async_get_report(100)
@@ -117,10 +123,10 @@ class E3CloudReportClientTest(IsolatedAsyncioTestCase):
         cloud.get_day_report = AsyncMock(
             side_effect=[CloudAuthError("40002"), _result()],
         )
-        client = E3CloudReportClient("美的美居", Mock(), access_token="token")
+        client = E3CloudClient("美的美居", Mock(), access_token="token")
         with (
             patch(
-                "midealan.devices.e3.cloud_report.get_midea_cloud",
+                "midealan.devices.e3.cloud.get_midea_cloud",
                 return_value=cloud,
             ),
             patch("asyncio.sleep", AsyncMock()) as sleep,
@@ -136,10 +142,10 @@ class E3CloudReportClientTest(IsolatedAsyncioTestCase):
         """Do not perform an outer retry when a standalone token is rejected."""
         cloud = Mock()
         cloud.get_day_report = AsyncMock(side_effect=CloudAuthError("40002"))
-        client = E3CloudReportClient("美的美居", Mock(), access_token="token")
+        client = E3CloudClient("美的美居", Mock(), access_token="token")
         with (
             patch(
-                "midealan.devices.e3.cloud_report.get_midea_cloud",
+                "midealan.devices.e3.cloud.get_midea_cloud",
                 return_value=cloud,
             ),
             patch("asyncio.sleep", AsyncMock()) as sleep,
@@ -158,7 +164,7 @@ class E3CloudReportClientTest(IsolatedAsyncioTestCase):
         login_cloud = Mock()
         login_cloud.login = AsyncMock(return_value=True)
         login_cloud.get_day_report = AsyncMock(return_value=_result())
-        client = E3CloudReportClient(
+        client = E3CloudClient(
             "美的美居",
             Mock(),
             access_token="token",
@@ -166,7 +172,7 @@ class E3CloudReportClientTest(IsolatedAsyncioTestCase):
             password="password",
         )
         with patch(
-            "midealan.devices.e3.cloud_report.get_midea_cloud",
+            "midealan.devices.e3.cloud.get_midea_cloud",
             side_effect=[token_cloud, login_cloud],
         ):
             report = await client.async_get_report(100)
@@ -181,19 +187,22 @@ class E3CloudReportClientTest(IsolatedAsyncioTestCase):
         cloud = Mock()
         cloud.login = AsyncMock(return_value=True)
         cloud.get_day_report = AsyncMock(return_value=_result())
-        client = E3CloudReportClient(
+        client = E3CloudClient(
             "美的美居",
             Mock(),
             account="user",
             password="password",
         )
         with patch(
-            "midealan.devices.e3.cloud_report.get_midea_cloud",
+            "midealan.devices.e3.cloud.get_midea_cloud",
             return_value=cloud,
         ):
             report = await client.async_get_report(100)
+            cached_report = await client.async_get_report(101)
         cloud.login.assert_awaited_once()
+        assert cloud.get_day_report.await_count == 2
         assert report is not None
+        assert cached_report is not None
 
     async def test_reauthenticates_when_fresh_token_is_rejected(self) -> None:
         """Log in again when even a fresh login token was rejected."""
@@ -203,7 +212,7 @@ class E3CloudReportClientTest(IsolatedAsyncioTestCase):
         second = Mock()
         second.login = AsyncMock(return_value=True)
         second.get_day_report = AsyncMock(return_value=_result())
-        client = E3CloudReportClient(
+        client = E3CloudClient(
             "美的美居",
             Mock(),
             account="user",
@@ -211,7 +220,7 @@ class E3CloudReportClientTest(IsolatedAsyncioTestCase):
         )
         with (
             patch(
-                "midealan.devices.e3.cloud_report.get_midea_cloud",
+                "midealan.devices.e3.cloud.get_midea_cloud",
                 side_effect=[first, second],
             ),
             patch("asyncio.sleep", AsyncMock()),
@@ -226,7 +235,7 @@ class E3CloudReportClientTest(IsolatedAsyncioTestCase):
         """Raise CloudAuthError when the account login fails."""
         cloud = Mock()
         cloud.login = AsyncMock(return_value=False)
-        client = E3CloudReportClient(
+        client = E3CloudClient(
             "美的美居",
             Mock(),
             account="user",
@@ -234,7 +243,7 @@ class E3CloudReportClientTest(IsolatedAsyncioTestCase):
         )
         with (
             patch(
-                "midealan.devices.e3.cloud_report.get_midea_cloud",
+                "midealan.devices.e3.cloud.get_midea_cloud",
                 return_value=cloud,
             ),
             pytest.raises(CloudAuthError),
@@ -244,10 +253,10 @@ class E3CloudReportClientTest(IsolatedAsyncioTestCase):
 
     async def test_no_credentials(self) -> None:
         """Raise CloudAuthError when neither token nor account is stored."""
-        client = E3CloudReportClient("美的美居", Mock())
+        client = E3CloudClient("美的美居", Mock())
         with (
             patch(
-                "midealan.devices.e3.cloud_report.get_midea_cloud",
+                "midealan.devices.e3.cloud.get_midea_cloud",
             ) as get_cloud,
             pytest.raises(CloudAuthError),
         ):
@@ -257,4 +266,4 @@ class E3CloudReportClientTest(IsolatedAsyncioTestCase):
     def test_unsupported_cloud(self) -> None:
         """Reject a cloud that does not provide usage reports."""
         with pytest.raises(CloudError):
-            E3CloudReportClient("Invalid", Mock())
+            E3CloudClient("Invalid", Mock())

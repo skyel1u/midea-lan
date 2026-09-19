@@ -4,7 +4,7 @@ The E3 local protocol does not report water or gas consumption; those values
 only exist in the Midea cloud, where the official app requests them with the
 ``dayReportV2`` message (see :meth:`MideaCloud.get_day_report`). This module
 parses that report into an :class:`E3DayReport` and fetches it with an
-:class:`E3CloudReportClient`.
+:class:`E3CloudClient`.
 """
 
 import asyncio
@@ -151,7 +151,7 @@ def _parse_report_date(value: object) -> date:
     return datetime.now(tz=UTC).astimezone().date() - timedelta(days=1)
 
 
-class E3CloudReportClient:
+class E3CloudClient:
     """Fetch the Midea cloud usage report of E3 appliances.
 
     Either an ``access_token`` (used as is) or an ``account``/``password`` pair
