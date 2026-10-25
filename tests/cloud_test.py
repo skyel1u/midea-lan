@@ -2032,9 +2032,11 @@ class DayReportTest(IsolatedAsyncioTestCase):
         api_url: str = "https://mp-prod.smartmidea.net/mas/v5/app/proxy?alias=",
     ) -> MideaCloud:
         """Build a cloud client for the day report tests."""
+        security = Mock()
+        security.sign.return_value = "sign"
         return MideaCloud(
             session=session,
-            security=Mock(),
+            security=security,
             app_id="appid",
             app_key="appkey",
             account="account",
@@ -2052,11 +2054,13 @@ class DayReportTest(IsolatedAsyncioTestCase):
         return session
 
     async def test_get_day_report(self) -> None:
-        """Request the usage report with the access token and proxy alias."""
+        """Request the signed usage report with the access token and alias."""
         session = self._session({"retCode": "0", "result": {"date": "2026-09-10"}})
         cloud = self._cloud(session)
         cloud.set_access_token("token")
-        result = await cloud.get_day_report(100)
+        cloud._security.sign.return_value = "sign"
+        with patch("midealan.cloud.time.time", return_value=1_700_000_000):
+            result = await cloud.get_day_report(100)
         assert result == {"date": "2026-09-10"}
         call = session.request.await_args
         assert call.args[0] == "POST"
@@ -2066,11 +2070,18 @@ class DayReportTest(IsolatedAsyncioTestCase):
         assert call.kwargs["headers"] == {
             "content-type": "application/json; charset=utf-8",
             "accessToken": "token",
+            "secretVersion": "1",
+            "sign": "sign",
+            "random": "1700000000",
         }
-        assert call.kwargs["json"] == {
-            "msg": "dayReportV2",
-            "params": {"applianceId": "100"},
-        }
+        body = json.dumps(
+            {
+                "msg": "dayReportV2",
+                "params": {"applianceId": "100"},
+            },
+        )
+        assert call.kwargs["data"] == body
+        cloud._security.sign.assert_called_once_with("", body, "1700000000")
         assert call.kwargs["allow_redirects"] is False
 
     async def test_get_day_report_does_not_follow_redirect(self) -> None:
@@ -2177,6 +2188,14 @@ class DayReportTest(IsolatedAsyncioTestCase):
             api_url="https://mapp.appsmb.com",  # codespell:ignore
         )
         cloud.set_access_token("token")
+        with pytest.raises(CloudError):
+            await cloud.get_day_report(100)
+
+    async def test_get_day_report_no_signature(self) -> None:
+        """Reject a report request the cloud cannot sign."""
+        cloud = self._cloud(Mock())
+        cloud.set_access_token("token")
+        cloud._security.sign.return_value = None
         with pytest.raises(CloudError):
             await cloud.get_day_report(100)
 
