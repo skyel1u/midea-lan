@@ -2030,9 +2030,11 @@ class DayReportTest(IsolatedAsyncioTestCase):
     def _cloud(
         session: Mock,
         api_url: str = "https://mp-prod.smartmidea.net/mas/v5/app/proxy?alias=",
+        security: Mock | None = None,
     ) -> MideaCloud:
         """Build a cloud client for the day report tests."""
-        security = Mock()
+        if security is None:
+            security = Mock()
         security.sign.return_value = "sign"
         return MideaCloud(
             session=session,
@@ -2056,9 +2058,9 @@ class DayReportTest(IsolatedAsyncioTestCase):
     async def test_get_day_report(self) -> None:
         """Request the signed usage report with the access token and alias."""
         session = self._session({"retCode": "0", "result": {"date": "2026-09-10"}})
-        cloud = self._cloud(session)
+        security = Mock()
+        cloud = self._cloud(session, security=security)
         cloud.set_access_token("token")
-        cloud._security.sign.return_value = "sign"
         with patch("midealan.cloud.time.time", return_value=1_700_000_000):
             result = await cloud.get_day_report(100)
         assert result == {"date": "2026-09-10"}
@@ -2081,7 +2083,7 @@ class DayReportTest(IsolatedAsyncioTestCase):
             },
         )
         assert call.kwargs["data"] == body
-        cloud._security.sign.assert_called_once_with("", body, "1700000000")
+        security.sign.assert_called_once_with("", body, "1700000000")
         assert call.kwargs["allow_redirects"] is False
 
     async def test_get_day_report_does_not_follow_redirect(self) -> None:
@@ -2193,11 +2195,14 @@ class DayReportTest(IsolatedAsyncioTestCase):
 
     async def test_get_day_report_no_signature(self) -> None:
         """Reject a report request the cloud cannot sign."""
-        cloud = self._cloud(Mock())
+        session = Mock()
+        security = Mock()
+        cloud = self._cloud(session, security=security)
         cloud.set_access_token("token")
-        cloud._security.sign.return_value = None
+        security.sign.return_value = None
         with pytest.raises(CloudError):
             await cloud.get_day_report(100)
+        session.request.assert_not_called()
 
 
 # Snapshotted once, at module import, before any test (in this file or
